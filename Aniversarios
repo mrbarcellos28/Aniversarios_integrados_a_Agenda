@@ -1,0 +1,132 @@
+/*******************************************************
+ * ANIVERSÁRIOS — menu no topo + sidebar (sem checkbox)
+ * Autor: Klenda (Apps Script Dev)
+ *******************************************************/
+
+const ANIV = {
+  CALENDAR_ID: null, // se quiser um calendário específico, coloque o ID aqui; null usa o padrão
+  TIMEZONE: 'America/Sao_Paulo'
+};
+
+/* ================= MENU NO TOPO ================= */
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu('Aniversários')
+      .addItem('Enviar para Agenda', 'criarEventosDeAniversario')
+      .addItem('Abrir botão', 'abrirSidebarAniversarios')
+      .addSeparator()
+      .addItem('Ajuda (colunas A: Nome | B: Data)', 'mostrarAjudaAniv')
+      .addToUi();
+  } catch (_) { /* modo headless */ }
+}
+
+/* ============== SIDEBAR COM BOTÃO ============== */
+function abrirSidebarAniversarios() {
+  const html = HtmlService.createHtmlOutput(`
+    <div style="font-family:system-ui,Arial; padding:16px;">
+      <h2 style="margin:0 0 12px 0;">Aniversários</h2>
+      <p>Esta ação lê a <b>aba ativa</b> e espera:</p>
+      <ul>
+        <li><b>Coluna A</b>: Nome</li>
+        <li><b>Coluna B</b>: Data de nascimento (dd/mm/aaaa ou aaaa-mm-dd)</li>
+      </ul>
+      <button id="btn" style="width:100%; padding:10px; font-size:16px; border-radius:8px;">
+        Enviar agora
+      </button>
+      <p id="msg" style="margin-top:12px; color:#555;"></p>
+      <script>
+        const btn = document.getElementById('btn');
+        const msg = document.getElementById('msg');
+        btn.onclick = function() {
+          btn.disabled = true; msg.textContent = 'Processando...';
+          google.script.run
+            .withSuccessHandler(res => { msg.textContent = res; btn.disabled = false; })
+            .withFailureHandler(err => { msg.textContent = 'Erro: ' + (err && err.message ? err.message : err); btn.disabled = false; })
+            .criarEventosDeAniversario();
+        };
+      </script>
+    </div>
+  `).setTitle('Aniversários');
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+/* ============== AJUDA RÁPIDA ============== */
+function mostrarAjudaAniv() {
+  const ui = SpreadsheetApp.getUi();
+  ui.alert(
+    'Como usar',
+    '1) Deixe a aba com os dados ativa.\n' +
+    '2) Coluna A = Nome | Coluna B = Data de nascimento.\n' +
+    '3) Use Aniversários → Enviar para Agenda (ou Abrir botão).\n' +
+    'Obs.: eventos são criados como dia todo no calendário do ano atual.',
+    ui.ButtonSet.OK
+  );
+}
+
+/* ============== FUNÇÃO PRINCIPAL ============== */
+/** Lê a aba ativa: Coluna A = Nome, Coluna B = Data */
+function criarEventosDeAniversario() {
+  const sh = SpreadsheetApp.getActive().getActiveSheet();
+  const values = sh.getDataRange().getValues();
+  if (values.length < 2) return 'Sem linhas além do cabeçalho.';
+
+  // calendário
+  const cal = ANIV.CALENDAR_ID
+    ? CalendarApp.getCalendarById(ANIV.CALENDAR_ID)
+    : CalendarApp.getDefaultCalendar();
+  if (!cal) throw new Error('Calendário não encontrado. Verifique o ID em ANIV.CALENDAR_ID.');
+
+  const anoAtual = new Date().getFullYear();
+  let criados = 0, pulados = 0;
+
+  for (let i = 1; i < values.length; i++) {
+    const nome = values[i][0];
+    const raw  = values[i][1];
+
+    if (!nome || !raw) { pulados++; continue; }
+
+    const nasc = parseDateLoose(raw);
+    if (!nasc) { pulados++; continue; }
+
+    const mes = nasc.getMonth();
+    const dia = nasc.getDate();
+
+    const d = new Date(anoAtual, mes, dia);
+    d.setHours(0,0,0,0);
+
+    const titulo = `🎉 Aniversário de ${nome}`;
+    const existentes = cal.getEventsForDay(d).filter(ev => ev.getTitle() === titulo);
+
+    if (!existentes.length) {
+      cal.createAllDayEvent(titulo, d);
+      criados++;
+    }
+  }
+
+  const msg = `Criados: ${criados} | Pulados: ${pulados}`;
+  try { SpreadsheetApp.getActive().toast(msg, 'Aniversários', 5); } catch(_) {}
+  return msg;
+}
+
+/* ====================== HELPERS ====================== */
+function parseDateLoose(v) {
+  if (!v) return null;
+  if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v)) return v;
+
+  const s = String(v).trim();
+
+  // dd/mm/aaaa
+  let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) {
+    const d = new Date(+m[3], +m[2]-1, +m[1]);
+    return isNaN(d) ? null : d;
+  }
+  // aaaa-mm-dd
+  m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  if (m) {
+    const d = new Date(+m[1], +m[2]-1, +m[3]);
+    return isNaN(d) ? null : d;
+  }
+  return null;
+}
